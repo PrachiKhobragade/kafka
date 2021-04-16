@@ -102,6 +102,9 @@ public class NetworkClient implements KafkaClient {
     /* the client id used to identify this client in requests to the server */
     private final String clientId;
 
+    /* the client software name and commit hash */
+    private final String clientSoftwareNameAndCommit;
+
     /* the current correlation id to use when sending requests to servers */
     private int correlation;
 
@@ -198,6 +201,44 @@ public class NetworkClient implements KafkaClient {
     }
 
     public NetworkClient(Selectable selector,
+        Metadata metadata,
+        String clientId,
+        int maxInFlightRequestsPerConnection,
+        long reconnectBackoffMs,
+        long reconnectBackoffMax,
+        int socketSendBuffer,
+        int socketReceiveBuffer,
+        int defaultRequestTimeoutMs,
+        long connectionSetupTimeoutMs,
+        long connectionSetupTimeoutMaxMs,
+        Time time,
+        boolean discoverBrokerVersions,
+        ApiVersions apiVersions,
+        Sensor throttleTimeSensor,
+        LogContext logContext,
+        String clientSoftwareNameAndCommit) {
+        this(null,
+            metadata,
+            selector,
+            clientId,
+            maxInFlightRequestsPerConnection,
+            reconnectBackoffMs,
+            reconnectBackoffMax,
+            socketSendBuffer,
+            socketReceiveBuffer,
+            defaultRequestTimeoutMs,
+            connectionSetupTimeoutMs,
+            connectionSetupTimeoutMaxMs,
+            time,
+            discoverBrokerVersions,
+            apiVersions,
+            throttleTimeSensor,
+            logContext,
+            new DefaultHostResolver(),
+            clientSoftwareNameAndCommit);
+    }
+
+    public NetworkClient(Selectable selector,
                          MetadataUpdater metadataUpdater,
                          String clientId,
                          int maxInFlightRequestsPerConnection,
@@ -250,6 +291,47 @@ public class NetworkClient implements KafkaClient {
                          Sensor throttleTimeSensor,
                          LogContext logContext,
                          HostResolver hostResolver) {
+        this(metadataUpdater,
+             null,
+             selector,
+             clientId,
+             maxInFlightRequestsPerConnection,
+             reconnectBackoffMs,
+             reconnectBackoffMax,
+             socketSendBuffer,
+             socketReceiveBuffer,
+             defaultRequestTimeoutMs,
+             connectionSetupTimeoutMs,
+             connectionSetupTimeoutMaxMs,
+             time,
+             discoverBrokerVersions,
+             apiVersions,
+             null,
+             logContext,
+             new DefaultHostResolver(),
+             null);
+
+    }
+
+    public NetworkClient(MetadataUpdater metadataUpdater,
+                         Metadata metadata,
+                         Selectable selector,
+                         String clientId,
+                         int maxInFlightRequestsPerConnection,
+                         long reconnectBackoffMs,
+                         long reconnectBackoffMax,
+                         int socketSendBuffer,
+                         int socketReceiveBuffer,
+                         int defaultRequestTimeoutMs,
+                         long connectionSetupTimeoutMs,
+                         long connectionSetupTimeoutMaxMs,
+                         Time time,
+                         boolean discoverBrokerVersions,
+                         ApiVersions apiVersions,
+                         Sensor throttleTimeSensor,
+                         LogContext logContext,
+                         HostResolver hostResolver,
+                         String clientSoftwareNameAndCommit) {
         /* It would be better if we could pass `DefaultMetadataUpdater` from the public constructor, but it's not
          * possible because `DefaultMetadataUpdater` is an inner class and it can only be instantiated after the
          * super constructor is invoked.
@@ -263,6 +345,7 @@ public class NetworkClient implements KafkaClient {
         }
         this.selector = selector;
         this.clientId = clientId;
+        this.clientSoftwareNameAndCommit = clientSoftwareNameAndCommit;
         this.inFlightRequests = new InFlightRequests(maxInFlightRequestsPerConnection);
         this.connectionStates = new ClusterConnectionStates(
                 reconnectBackoffMs, reconnectBackoffMax,
@@ -557,7 +640,16 @@ public class NetworkClient implements KafkaClient {
         long updatedNow = this.time.milliseconds();
         List<ClientResponse> responses = new ArrayList<>();
         handleCompletedSends(responses, updatedNow);
-        handleCompletedReceives(responses, updatedNow);
+
+        try {
+            handleCompletedReceives(responses, updatedNow);
+        } catch (StaleClusterMetadataException e) {
+            // upon stale metadata exception from a different cluster, close the network client
+            // the producer/consumer will hit closedSelector exception and close
+            log.error("Received stale metadata from a different cluster, close the network client now");
+            this.close();
+        }
+
         handleDisconnections(responses, updatedNow);
         handleConnections();
         handleInitiateApiVersionRequests(updatedNow);
@@ -902,7 +994,7 @@ public class NetworkClient implements KafkaClient {
                         maxApiVersion = apiVersion.maxVersion();
                     }
                 }
-                nodesNeedingApiVersionsFetch.put(node, new ApiVersionsRequest.Builder(maxApiVersion));
+                nodesNeedingApiVersionsFetch.put(node, new ApiVersionsRequest.Builder(maxApiVersion, this.clientSoftwareNameAndCommit));
             }
             return;
         }
@@ -939,7 +1031,7 @@ public class NetworkClient implements KafkaClient {
             // connection.
             if (discoverBrokerVersions) {
                 this.connectionStates.checkingApiVersions(node);
-                nodesNeedingApiVersionsFetch.put(node, new ApiVersionsRequest.Builder());
+                nodesNeedingApiVersionsFetch.put(node, new ApiVersionsRequest.Builder(this.clientSoftwareNameAndCommit));
                 log.debug("Completed connection to node {}. Fetching API versions.", node);
             } else {
                 this.connectionStates.ready(node);
