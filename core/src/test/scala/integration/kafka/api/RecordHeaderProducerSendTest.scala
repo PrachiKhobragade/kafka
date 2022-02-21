@@ -23,7 +23,7 @@ import kafka.api.BaseProducerSendTest
 import kafka.server.KafkaConfig
 import org.apache.kafka.clients.producer.{KafkaProducer, ProducerConfig, ProducerRecord}
 import org.apache.kafka.common.header.internals.RecordHeaders
-import org.junit.Test
+import org.junit.jupiter.api.Test
 
 class RecordHeaderProducerSendTest extends BaseProducerSendTest {
 
