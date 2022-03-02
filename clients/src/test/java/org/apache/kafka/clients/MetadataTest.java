@@ -76,6 +76,8 @@ public class MetadataTest {
 
     private long refreshBackoffMs = 100;
     private long metadataExpireMs = 1000;
+    private final long connectionSetupTimeoutMsTest = 5 * 1000;
+    private final long connectionSetupTimeoutMaxMsTest = 127 * 1000;
     private Metadata metadata = new Metadata(refreshBackoffMs, metadataExpireMs, new LogContext(),
             new ClusterResourceListeners());
 
@@ -84,7 +86,8 @@ public class MetadataTest {
 
     private NetworkClient clusterClient = new NetworkClient(selector, clusterMetadata, "mock-cluster-md", Integer.MAX_VALUE,
         0, 0, 64 * 1024, 64 * 1024,
-        defaultRequestTimeoutMs, ClientDnsLookup.DEFAULT, time, true, new ApiVersions(), null, new LogContext(),
+        defaultRequestTimeoutMs, connectionSetupTimeoutMsTest, connectionSetupTimeoutMaxMsTest, time, true,
+        new ApiVersions(), null, new LogContext(), null,
         LeastLoadedNodeAlgorithm.VANILLA, Collections.singletonList("some.invalid.hostname.foo.bar.local:9999"));
 
     private static MetadataResponse emptyMetadataResponse() {

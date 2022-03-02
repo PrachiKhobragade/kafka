@@ -149,10 +149,10 @@ public class NetworkClientTest {
     private NetworkClient createClusterNetworkClient() {
         return new NetworkClient(selector, clusterMetadataUpdater, "mock-cluster-md", Integer.MAX_VALUE,
             0, 0, 64 * 1024, 64 * 1024,
-            defaultRequestTimeoutMs, ClientDnsLookup.DEFAULT, time, true, new ApiVersions(), new LogContext(),
+            defaultRequestTimeoutMs, connectionSetupTimeoutMsTest, connectionSetupTimeoutMaxMsTest, time, true, new ApiVersions(), new LogContext(),
             LeastLoadedNodeAlgorithm.VANILLA, Collections.singletonList("example.com:10000"));
     }
-    
+
     @BeforeEach
     public void setup() {
         selector.reset();

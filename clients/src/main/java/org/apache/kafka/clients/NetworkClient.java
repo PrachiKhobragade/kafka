@@ -329,7 +329,7 @@ public class NetworkClient implements KafkaClient {
              clientSoftwareNameAndCommit,
              leastLoadedNodeAlgorithm,
              bootstrapServerUrls);
-  }
+    }
 
     public NetworkClient(Selectable selector,
                          MetadataUpdater metadataUpdater,
@@ -401,6 +401,47 @@ public class NetworkClient implements KafkaClient {
              null,
              leastLoadedNodeAlgorithm);
     }
+
+    public NetworkClient(Selectable selector,
+                         MetadataUpdater metadataUpdater,
+                         String clientId,
+                         int maxInFlightRequestsPerConnection,
+                         long reconnectBackoffMs,
+                         long reconnectBackoffMax,
+                         int socketSendBuffer,
+                         int socketReceiveBuffer,
+                         int defaultRequestTimeoutMs,
+                         long connectionSetupTimeoutMs,
+                         long connectionSetupTimeoutMaxMs,
+                         Time time,
+                         boolean discoverBrokerVersions,
+                         ApiVersions apiVersions,
+                         LogContext logContext,
+                         LeastLoadedNodeAlgorithm leastLoadedNodeAlgorithm,
+                         List<String> bootstrapServersConfig) {
+        this(metadataUpdater,
+             null,
+             selector,
+             clientId,
+             maxInFlightRequestsPerConnection,
+             reconnectBackoffMs,
+             reconnectBackoffMax,
+             socketSendBuffer,
+             socketReceiveBuffer,
+             defaultRequestTimeoutMs,
+             connectionSetupTimeoutMs,
+             connectionSetupTimeoutMaxMs,
+             time,
+             discoverBrokerVersions,
+             apiVersions,
+             null,
+             logContext,
+             new DefaultHostResolver(),
+             null,
+             leastLoadedNodeAlgorithm,
+             bootstrapServersConfig);
+    }
+
 
     public NetworkClient(MetadataUpdater metadataUpdater,
                          Metadata metadata,
@@ -485,7 +526,7 @@ public class NetworkClient implements KafkaClient {
              Collections.emptyList());
     }
 
-  public NetworkClient(MetadataUpdater metadataUpdater,
+    public NetworkClient(MetadataUpdater metadataUpdater,
                        Metadata metadata,
                        Selectable selector,
                        String clientId,
@@ -542,7 +583,6 @@ public class NetworkClient implements KafkaClient {
         this.leastLoadedNodeAlgorithm = leastLoadedNodeAlgorithm;
         this.bootstrapServers.addAll(bootstrapServersConfig);
     }
-
     /**
      * Begin connecting to the given node, return true if we are already connected and ready to send to that node.
      *
@@ -605,7 +645,7 @@ public class NetworkClient implements KafkaClient {
         Iterable<InFlightRequest> inFlightRequests = this.inFlightRequests.clearAll(nodeId);
         for (InFlightRequest request : inFlightRequests) {
             log.trace("Cancelled request {} {} with correlation id {} due to node {} being disconnected",
-                    request.header.apiKey(), request.request, request.header.correlationId(), nodeId);
+                request.header.apiKey(), request.request, request.header.correlationId(), nodeId);
 
             if (!request.isInternalRequest) {
                 if (responses != null)
@@ -751,10 +791,10 @@ public class NetworkClient implements KafkaClient {
                 version = builder.latestAllowedVersion();
                 if (discoverBrokerVersions && log.isTraceEnabled())
                     log.trace("No version information found when sending {} with correlation id {} to node {}. " +
-                            "Assuming version {}.", clientRequest.apiKey(), clientRequest.correlationId(), nodeId, version);
+                        "Assuming version {}.", clientRequest.apiKey(), clientRequest.correlationId(), nodeId, version);
             } else {
                 version = versionInfo.latestUsableVersion(clientRequest.apiKey(), builder.oldestAllowedVersion(),
-                        builder.latestAllowedVersion());
+                    builder.latestAllowedVersion());
             }
             // The call to build may also throw UnsupportedVersionException, if there are essential
             // fields that cannot be represented in the chosen version.
@@ -827,16 +867,7 @@ public class NetworkClient implements KafkaClient {
         long updatedNow = this.time.milliseconds();
         List<ClientResponse> responses = new ArrayList<>();
         handleCompletedSends(responses, updatedNow);
-
-        try {
-            handleCompletedReceives(responses, updatedNow);
-        } catch (StaleClusterMetadataException e) {
-            // upon stale metadata exception from a different cluster, close the network client
-            // the producer/consumer will hit closedSelector exception and close
-            log.error("Received stale metadata from a different cluster, close the network client now");
-            this.close();
-        }
-
+        handleCompletedReceives(responses, updatedNow);
         handleDisconnections(responses, updatedNow);
         handleConnections();
         handleInitiateApiVersionRequests(updatedNow);
@@ -946,6 +977,26 @@ public class NetworkClient implements KafkaClient {
         if (algo == null) {
             throw new IllegalStateException("leastLoadedNodeAlgorithm cannot be null");
         }
+
+        if (this.metadataUpdater.isUpdateClusterMetadataDue(now)) {
+            //update cluster metadata due, resolve bootstrap server and randomly pick up
+            //one node from the resolved node set as least loaded node
+            List<InetSocketAddress> addresses = ClientUtils.parseAndValidateAddresses(
+                this.bootstrapServers);
+            List<Node> newNodes = new ArrayList<>();
+
+            int nodeId = -1;
+            for (InetSocketAddress address : addresses) {
+                newNodes.add(new Node(nodeId--, address.getHostString(), address.getPort()));
+            }
+
+            int offset = this.randOffset.nextInt(newNodes.size());
+            Node node = newNodes.get(offset);
+            log.info("Resolved bootstrap server again, randomly picked node {} as least loaded node from the resolved node set", node);
+
+            return node;
+        }
+
         switch (algo) {
             case VANILLA:
                 return vanillaLeastLoadedNode(now, nodes);
@@ -986,13 +1037,13 @@ public class NetworkClient implements KafkaClient {
                 foundConnecting = node;
             } else if (canConnect(node, now)) {
                 if (foundCanConnect == null ||
-                        this.connectionStates.lastConnectAttemptMs(foundCanConnect.idString()) >
-                                this.connectionStates.lastConnectAttemptMs(node.idString())) {
+                    this.connectionStates.lastConnectAttemptMs(foundCanConnect.idString()) >
+                        this.connectionStates.lastConnectAttemptMs(node.idString())) {
                     foundCanConnect = node;
                 }
             } else {
                 log.trace("Removing node {} from least loaded node selection since it is neither ready " +
-                        "for sending or connecting", node);
+                    "for sending or connecting", node);
             }
         }
 
@@ -1468,6 +1519,11 @@ public class NetworkClient implements KafkaClient {
             return !hasFetchInProgress() && this.metadata.timeToNextUpdate(now) == 0;
         }
 
+        @Override
+        public boolean isUpdateClusterMetadataDue(long now) {
+            return this.metadata.shouldUpdateClusterMetadataFromBootstrap(now);
+        }
+
         private boolean hasFetchInProgress() {
             return inProgress != null;
         }
@@ -1584,6 +1640,7 @@ public class NetworkClient implements KafkaClient {
          */
         private long maybeUpdate(long now, Node node) {
             String nodeConnectionId = node.idString();
+            this.metadata.incrementNodesTriedSinceLastSuccessfulRefresh();
 
             if (canSendRequest(nodeConnectionId, now)) {
                 Metadata.MetadataRequestAndVersion requestAndVersion = metadata.newMetadataRequestAndVersion(now);
